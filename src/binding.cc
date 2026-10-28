@@ -7,6 +7,7 @@
 #include <map>
 #include <mutex>
 #include <thread>
+#include <type_traits>
 
 #include "cppgc/allocation.h"
 #include "cppgc/persistent.h"
@@ -26,6 +27,38 @@
 #include "v8/src/libplatform/default-platform.h"
 
 using namespace support;
+
+// The Rust wrapper copies fixed numeric PODs through out pointers, avoiding
+// target-dependent C++ aggregate return conventions.
+static_assert(std::is_standard_layout_v<v8::BoundedStackSampler::Options>);
+static_assert(sizeof(v8::BoundedStackSampler::Options) == 16);
+static_assert(sizeof(v8::BoundedStackSampler::Frame) == 8);
+static_assert(sizeof(v8::BoundedStackSampler::Sample) == 272);
+static_assert(sizeof(v8::BoundedStackSampler::Summary) == 40);
+
+extern "C" {
+v8::BoundedStackSampler* v8__BoundedStackSampler__New(
+    v8::Isolate* isolate, const v8::Context* context,
+    const v8::BoundedStackSampler::Options* options) {
+  return v8::BoundedStackSampler::New(isolate, ptr_to_local(context), *options);
+}
+void v8__BoundedStackSampler__Stop(v8::BoundedStackSampler* sampler) {
+  sampler->Stop();
+}
+void v8__BoundedStackSampler__Summary(
+    const v8::BoundedStackSampler* sampler,
+    v8::BoundedStackSampler::Summary* out) {
+  *out = sampler->GetSummary();
+}
+bool v8__BoundedStackSampler__Sample(const v8::BoundedStackSampler* sampler,
+                                    uint32_t index,
+                                    v8::BoundedStackSampler::Sample* out) {
+  return sampler->GetSample(index, out);
+}
+void v8__BoundedStackSampler__Dispose(v8::BoundedStackSampler* sampler) {
+  sampler->Dispose();
+}
+}
 
 // TODO(bartlomieju): ideally we could ignore only some of the deprecated APIs
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"

@@ -33,6 +33,7 @@ mod array_buffer;
 mod array_buffer_view;
 mod bigint;
 mod binding;
+mod bounded_stack_sampler;
 mod context;
 pub use context::ContextOptions;
 pub mod cppgc;
@@ -95,6 +96,7 @@ pub mod simdutf;
 pub mod V8;
 
 pub use array_buffer::*;
+pub use bounded_stack_sampler::*;
 pub use data::*;
 pub use exception::*;
 pub use external_references::ExternalReference;
