@@ -953,6 +953,115 @@ fn eval<'s>(
 }
 
 #[test]
+fn bounded_stack_sampler_pod_layout() {
+  assert_eq!(std::mem::size_of::<v8::BoundedStackSamplingOptions>(), 16);
+  assert_eq!(std::mem::size_of::<v8::BoundedStackFrame>(), 8);
+  assert_eq!(std::mem::size_of::<v8::BoundedStackSample>(), 272);
+  assert_eq!(std::mem::size_of::<v8::BoundedStackSamplingSummary>(), 40);
+}
+
+#[cfg(all(
+  any(target_os = "linux", target_os = "macos"),
+  any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[test]
+fn bounded_stack_sampler_real_numeric_samples_and_limit() {
+  let _setup_guard = setup::sequential_test();
+  let isolate = &mut v8::Isolate::new(Default::default());
+  v8::scope!(let scope, isolate);
+  let context = v8::Context::new(scope, Default::default());
+  let scope = &mut v8::ContextScope::new(scope, context);
+  let function = v8::Local::<v8::Function>::try_from(eval(scope,
+    "function sampled(ms) { let n=0; const end=Date.now()+ms; while(Date.now()<end) { for(let i=0;i<10000;i++) n=Math.imul(n+1,3); } return n; } sampled(2); sampled"
+  ).unwrap()).unwrap();
+  let expected_script = function.script_id();
+  let options = v8::BoundedStackSamplingOptions {
+    max_samples: 2,
+    ..Default::default()
+  };
+  let sampler = v8::BoundedStackSampler::new(scope, options).unwrap();
+  assert!(v8::BoundedStackSampler::new(scope, options).is_none());
+  eval(scope, "sampled(80)").unwrap();
+  let report = sampler.finish();
+  assert_eq!(report.samples.len(), 2);
+  assert!(
+    report
+      .summary
+      .loss()
+      .contains(v8::BoundedStackSamplingLoss::SAMPLE_LIMIT)
+  );
+  assert!(
+    report
+      .samples
+      .iter()
+      .flat_map(|s| s.frames())
+      .any(|frame| frame.script_id == expected_script
+        && frame.function_start_utf16 >= 0)
+  );
+  assert!(
+    report
+      .samples
+      .windows(2)
+      .all(|w| w[0].offset_us <= w[1].offset_us)
+  );
+  assert!(report.samples.iter().all(|s| s.frames().len() <= 32));
+  // finish releases native admission, even with the owned report retained.
+  drop(v8::BoundedStackSampler::new(scope, options).unwrap());
+}
+
+#[cfg(all(
+  any(target_os = "linux", target_os = "macos"),
+  any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[test]
+fn bounded_stack_sampler_unwind_and_context_filter() {
+  let _setup_guard = setup::sequential_test();
+  let isolate = &mut v8::Isolate::new(Default::default());
+  v8::scope!(let scope, isolate);
+  let context = v8::Context::new(scope, Default::default());
+  let other = v8::Context::new(scope, Default::default());
+  let scope = &mut v8::ContextScope::new(scope, context);
+  let invalid = v8::BoundedStackSamplingOptions {
+    max_samples: 257,
+    ..Default::default()
+  };
+  assert!(v8::BoundedStackSampler::new(scope, invalid).is_none());
+  let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let _sampler =
+      v8::BoundedStackSampler::new(scope, Default::default()).unwrap();
+    panic!("exercise sampler guard cleanup");
+  }));
+  assert!(unwind.is_err());
+  let sampler =
+    v8::BoundedStackSampler::new(scope, Default::default()).unwrap();
+  {
+    let child = &mut v8::ContextScope::new(scope, other);
+    eval(child, "const end=Date.now()+40; let n=0; while(Date.now()<end) { for(let i=0;i<10000;i++) n=Math.imul(n+1,3); }").unwrap();
+  }
+  let report = sampler.finish();
+  assert!(report.samples.is_empty());
+  assert!(report.summary.other_context_observations > 0);
+}
+
+#[cfg(all(
+  any(target_os = "linux", target_os = "macos"),
+  any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[test]
+fn bounded_stack_sampler_forgotten_guard_isolate_cleanup() {
+  let _setup_guard = setup::sequential_test();
+  for _ in 0..5 {
+    let isolate = &mut v8::Isolate::new(Default::default());
+    v8::scope!(let scope, isolate);
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let sampler =
+      v8::BoundedStackSampler::new(scope, Default::default()).unwrap();
+    std::mem::forget(sampler);
+  }
+}
+
+#[test]
 fn try_catch() {
   let _setup_guard = setup::parallel_test();
   let isolate = &mut v8::Isolate::new(Default::default());
